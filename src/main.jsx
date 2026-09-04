@@ -1,17 +1,22 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
-import { sb } from "./dados";
+import { sb, temAcesso } from "./dados";
 
 /**
- * Portão de entrada.
+ * Portão de entrada — duas perguntas, nesta ordem.
  *
- * Sem login, a chave pública do navegador daria a qualquer pessoa o
- * mesmo acesso que você tem. Com login, as regras de segurança do banco
- * conseguem responder à única pergunta que importa: de quem é esta linha?
+ *   1. Quem é você?      → o link enviado por e-mail responde.
+ *   2. Você foi convidado? → a lista `permitidos` no banco responde.
+ *
+ * A primeira sozinha não basta: provar que o e-mail é seu não faz dele
+ * um e-mail autorizado. A segunda é a que realmente fecha a porta, e ela
+ * vive dentro do banco — o app só repete a pergunta para poder recusar
+ * em português, em vez de mostrar uma arena vazia sem explicação.
  */
 function Portao() {
   const [sessao, setSessao] = useState(undefined);
+  const [acesso, setAcesso] = useState(undefined); // undefined | true | false
   const [email, setEmail] = useState("");
   const [aviso, setAviso] = useState("");
 
@@ -21,8 +26,38 @@ function Portao() {
     return () => data.subscription.unsubscribe();
   }, []);
 
+  // Segunda pergunta: só faz sentido depois que existe uma sessão.
+  useEffect(() => {
+    if (!sessao) { setAcesso(undefined); return; }
+    let vivo = true;
+    temAcesso()
+      .then((ok) => vivo && setAcesso(ok))
+      .catch(() => vivo && setAcesso(false));
+    return () => { vivo = false; };
+  }, [sessao]);
+
   if (sessao === undefined) return <Tela>Carregando…</Tela>;
-  if (sessao) return <App />;
+
+  if (sessao) {
+    if (acesso === undefined) return <Tela>Conferindo o convite…</Tela>;
+    if (acesso) return <App />;
+    return (
+      <Tela>
+        <h1 style={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 30, margin: "0 0 6px" }}>
+          Sem acesso
+        </h1>
+        <p style={{ color: "#5C6F69", fontSize: 14 }}>
+          O e-mail <b>{sessao.user.email}</b> não está na lista de convidados
+          desta arena. Peça a quem administra para incluí-lo.
+        </p>
+        <button onClick={() => sb.auth.signOut()}
+          style={{ background: "#132B36", color: "#fff", border: 0, borderRadius: 2, padding: "9px 18px", cursor: "pointer",
+                   fontFamily: "'Barlow Condensed',sans-serif", fontSize: 16, fontWeight: 600, marginTop: 14 }}>
+          Sair e tentar outro e-mail
+        </button>
+      </Tela>
+    );
+  }
 
   const entrar = async (e) => {
     e.preventDefault();

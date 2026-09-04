@@ -13,7 +13,8 @@ Do zero ao ar em uma sessão de mais ou menos vinte minutos.
 
 A chave `anon` vai para o navegador e isso é intencional: quem protege os dados
 não é o segredo da chave, e sim as políticas de RLS criadas pelo script. Elas
-respondem a uma pergunta em cada linha lida ou gravada — *de quem é esta linha?*
+respondem a uma pergunta em cada linha lida ou gravada — *este e-mail está na
+lista de convidados?*
 
 ---
 
@@ -56,26 +57,48 @@ volta apontando para `localhost`.
 
 ## 4. Quem pode entrar
 
-O app é **só por convite**. O login pede um link mágico com
-`shouldCreateUser: false`, ou seja, um e-mail desconhecido recebe uma recusa em
-vez de virar conta nova.
+O acesso tem **duas trancas**, e elas respondem a perguntas diferentes.
 
-Para fechar a porta de vez, no Supabase:
+**Tranca 1 — quem é você?** O login é por *link mágico*: a pessoa digita o
+e-mail, o Supabase manda um link, e clicar nele prova a posse daquela caixa de
+entrada. Não há senha para vazar nem para esquecer. O app pede o link com
+`shouldCreateUser: false`, então um e-mail desconhecido recebe uma recusa em vez
+de virar conta nova.
 
-1. **Authentication → Sign In / Providers → Email**: desligue **Allow new users
-   to sign up**.
-2. **Authentication → Users → Invite user**: convide, um a um, os e-mails que
-   podem entrar.
+**Tranca 2 — você foi convidado?** Provar que o e-mail é seu não faz dele um
+e-mail autorizado. Quem decide isso é a tabela `permitidos`, no banco. Para
+liberar alguém:
 
-Quem não estiver na lista não consegue entrar nem criar conta. Para tirar
-alguém, basta apagar o usuário na mesma tela.
+```sql
+insert into permitidos (email, nota) values ('fulano@email.com', 'treinador');
+```
 
-Lembre que cada conta enxerga apenas os próprios dados. Se a ideia é que várias
-pessoas vejam a mesma arena, o caminho é uma conta compartilhada por enquanto —
-compartilhar entre contas exige uma coluna de "arena" nas tabelas e um ajuste
-nas políticas de RLS.
+Para tirar:
 
----
+```sql
+delete from permitidos where email = 'fulano@email.com';
+```
+
+A checagem acontece **dentro das políticas de RLS**, não na tela. Isso importa:
+mesmo quem chame a API do Supabase por fora do app, com a chave pública na mão,
+não lê nem grava uma linha se não estiver na lista. A tela apenas repete a
+pergunta antes, para poder dizer "sem acesso" em português.
+
+Reforço opcional, no painel: **Authentication → Sign In / Providers → Email**,
+desligue **Allow new users to sign up**. Aí nem conta chega a existir.
+
+### Todos veem tudo
+
+A política de RLS é uma frase só: *quem está na lista enxerga e edita tudo*.
+Não há sessão separada por pessoa — é uma arena compartilhada, como um quadro
+branco na parede da academia. A coluna `dono` continua registrando quem criou
+cada linha, mas não decide mais nada.
+
+Uma consequência prática: as telas não se atualizam sozinhas entre navegadores.
+Se duas pessoas mexem ao mesmo tempo, cada uma só vê o trabalho da outra depois
+de recarregar a página, e uma edição simultânea no mesmo registro fica com a
+última gravação. Para uma prévia, isso é aceitável; se virar rotina, o caminho é
+ligar o *realtime* do Supabase.
 
 ## 5. Atualizações
 

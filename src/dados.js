@@ -1,9 +1,32 @@
 import { createClient } from "@supabase/supabase-js";
 
-export const sb = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+const URL = import.meta.env.VITE_SUPABASE_URL;
+const CHAVE = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Sem as variáveis, o createClient explode e a tela fica branca, sem pista
+// nenhuma. Um erro com nome é mais barato que meia hora de depuração.
+if (!URL || !CHAVE) {
+  throw new Error(
+    "Faltam VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY. " +
+    "Local: copie .env.example para .env e preencha. " +
+    "Na Vercel: Settings → Environment Variables, e depois Redeploy."
+  );
+}
+
+export const sb = createClient(URL, CHAVE);
+
+/* ------------------------------------------------------------------ *
+ *  A portaria, vista do lado do navegador.
+ *
+ *  Quem realmente barra é a política de RLS no banco. Esta função só
+ *  pergunta a mesma coisa antes da tela abrir, para que a recusa venha
+ *  escrita em português em vez de uma arena vazia e inexplicável.
+ * ------------------------------------------------------------------ */
+export async function temAcesso() {
+  const { data, error } = await sb.rpc("tem_acesso");
+  if (error) throw error;
+  return data === true;
+}
 
 /* ------------------------------------------------------------------ *
  *  Carga: o banco fala snake_case, o app fala camelCase.
