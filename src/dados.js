@@ -1,11 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
-const URL = import.meta.env.VITE_SUPABASE_URL;
-const CHAVE = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const ENDERECO = (import.meta.env.VITE_SUPABASE_URL ?? "").trim();
+const CHAVE = (import.meta.env.VITE_SUPABASE_ANON_KEY ?? "").trim();
 
 // Sem as variáveis, o createClient explode e a tela fica branca, sem pista
 // nenhuma. Um erro com nome é mais barato que meia hora de depuração.
-if (!URL || !CHAVE) {
+if (!ENDERECO || !CHAVE) {
   throw new Error(
     "Faltam VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY. " +
     "Local: copie .env.example para .env e preencha. " +
@@ -13,7 +13,36 @@ if (!URL || !CHAVE) {
   );
 }
 
-export const sb = createClient(URL, CHAVE);
+/* ------------------------------------------------------------------ *
+ *  A URL precisa ser a RAIZ do projeto, sem caminho nenhum.
+ *
+ *  O cliente monta cada endereço com `new URL("rest/v1", base)`, que é
+ *  resolução relativa: qualquer caminho na base contamina todos eles.
+ *  Com a URL do painel no lugar da URL da API, a chamada vira
+ *  ".../dashboard/project/abc/rest/v1/rpc/..." e o roteador da Supabase
+ *  responde "Invalid path specified in request URL" — uma mensagem que
+ *  não menciona nem a variável nem o painel, e manda você procurar o
+ *  problema no banco, onde ele não está.
+ * ------------------------------------------------------------------ */
+const raiz = (() => {
+  let u;
+  try {
+    u = new URL(ENDERECO);
+  } catch {
+    throw new Error(`VITE_SUPABASE_URL não é uma URL válida: "${ENDERECO}"`);
+  }
+  if (u.pathname !== "/" || u.search || u.hash) {
+    throw new Error(
+      `VITE_SUPABASE_URL tem caminho a mais: "${ENDERECO}". ` +
+      `Use só a raiz — "${u.origin}". ` +
+      "O valor certo está em Project Settings → API → Project URL " +
+      "(não é o endereço do painel que aparece na barra do navegador)."
+    );
+  }
+  return u.origin;
+})();
+
+export const sb = createClient(raiz, CHAVE);
 
 /* ------------------------------------------------------------------ *
  *  A portaria, vista do lado do navegador.
