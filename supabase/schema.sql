@@ -35,6 +35,24 @@ create table if not exists eventos (
 create index if not exists exames_pessoa on exames(pessoa_id);
 
 -- ------------------------------------------------------------
+--  Uma medição por atleta por dia.
+--
+--  Duas medições no mesmo dia não são mais informação: são uma
+--  ambiguidade. O ranking pega "a primeira" e "a última" de cada
+--  participante, e com duas do mesmo dia o resultado passa a
+--  depender da ordem em que as linhas voltaram do banco — ou seja,
+--  de nada. A trava vive aqui, e não só na tela, porque a tela é
+--  uma cópia entre muitas: duas pessoas gravando ao mesmo tempo
+--  passariam por qualquer conferência feita em memória.
+--
+--  Se este comando falhar, já existem duplicatas. Encontre-as com:
+--    select pessoa_id, data, count(*) from exames
+--    group by 1,2 having count(*) > 1;
+--  Apague as sobras pelo app (ou por SQL) e rode de novo.
+-- ------------------------------------------------------------
+create unique index if not exists exames_um_por_dia on exames(pessoa_id, data);
+
+-- ------------------------------------------------------------
 --  A coluna `dono` guarda quem criou a linha, e só isso.
 --  Ela NÃO decide mais quem enxerga o quê (ver adiante).
 --  Por isso vira anulável e deixa de arrastar os dados junto
