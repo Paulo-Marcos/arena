@@ -890,13 +890,14 @@ function Medicoes({ db, up, alvo, limparAlvo }) {
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [vals, setVals] = useState({});
   const [verExtras, setVerExtras] = useState(false);
+  const [manual, setManual] = useState(false);
 
   // Quem chegou pelo botão "+ Nova medição" da ficha do atleta já vem
-  // com a pergunta respondida. O alvo é consumido uma vez e devolvido,
-  // senão ele prenderia a seleção nas visitas seguintes à aba.
+  // com a pergunta respondida — e querendo digitar, não importar.
   useEffect(() => {
     if (!alvo) return;
     setPessoaId(alvo);
+    setManual(true);
     limparAlvo();
   }, [alvo]);
 
@@ -925,63 +926,75 @@ function Medicoes({ db, up, alvo, limparAlvo }) {
 
   return (
     <>
-      {/* Primeira pergunta, sempre: de quem é esta medição? Tudo abaixo
-          depende da resposta, então ela não pode ficar no meio da tela. */}
+      {/* A importação por chat de IA vem primeiro e não depende de escolher
+          ninguém: uma única resposta da IA pode trazer medições de várias
+          pessoas de uma vez, e exigir um atleta aqui só atrapalharia. */}
+      <ImportarJSON db={db} up={up} />
+
       <div className="cartao">
-        <h2>De quem é a medição?</h2>
+        <h2>Cadastrar manualmente</h2>
+        <p><small>Para digitar os valores de uma pessoa por vez, ou conferir o histórico dela.</small></p>
         <div className="campo" style={{ maxWidth: 340 }}>
           <label>Atleta</label>
-          <select value={pessoaId} onChange={(e) => setPessoaId(e.target.value)}>
+          <select value={pessoaId} onChange={(e) => { setPessoaId(e.target.value); setManual(false); }}>
             <option value="">Selecione um atleta</option>
             {db.pessoas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
           </select>
         </div>
         {db.pessoas.length === 0 && (
-          <p style={{ marginTop: 10 }}><small>Nenhum atleta cadastrado ainda. Comece pela aba <strong>Atletas</strong>.</small></p>
+          <p style={{ marginTop: 10 }}><small>Nenhum atleta cadastrado ainda. Comece pela aba <strong>Atletas</strong> — ou importe acima, que quem não existe é criado na hora.</small></p>
         )}
       </div>
 
-      {!pessoa ? (
-        <div className="cartao"><small>Escolha um atleta acima para cadastrar e ver as medições dele.</small></div>
-      ) : (
+      {pessoa && (
         <>
-          <div className="cartao">
-            <h2>Nova medição de {pessoa.nome}</h2>
-            <p><small>Envie a imagem do relatório ou digite os valores. Deixe em branco o que não for usar — só entra no ranking o indicador que as duas medições tiverem.</small></p>
-            <LeitorRelatorio aplicar={aplicarLeitura} />
+          {!manual ? (
+            <div className="cartao">
+              <h2>Nova medição de {pessoa.nome}</h2>
+              <p><small>Preencher dezessete campos à mão é trabalhoso. O formulário só abre quando você pedir.</small></p>
+              <button className="b" style={{ background: "var(--acao)", borderColor: "var(--acao)" }}
+                onClick={() => setManual(true)}>Digitar os dados de {pessoa.nome}</button>
+            </div>
+          ) : (
+            <div className="cartao">
+              <div className="linha" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+                <h2 style={{ margin: 0 }}>Nova medição de {pessoa.nome}</h2>
+                <button className="b ghost" onClick={() => setManual(false)}>Fechar</button>
+              </div>
+              <p><small>Envie a imagem do relatório ou digite os valores. Deixe em branco o que não for usar — só entra no ranking o indicador que as duas medições tiverem.</small></p>
+              <LeitorRelatorio aplicar={aplicarLeitura} />
 
-            <div className="linha" style={{ marginBottom: 12 }}>
-              <div className="campo" style={{ maxWidth: 200 }}>
-                <label>Data da medição</label>
-                <input type="date" value={data} onChange={(e) => setData(e.target.value)} />
+              <div className="linha" style={{ marginBottom: 12 }}>
+                <div className="campo" style={{ maxWidth: 200 }}>
+                  <label>Data da medição</label>
+                  <input type="date" value={data} onChange={(e) => setData(e.target.value)} />
+                </div>
+              </div>
+
+              {conflito && (
+                <p style={{ margin: "0 0 12px" }}><small style={{ color: "var(--alerta)" }}>
+                  <strong>{pessoa.nome} já tem uma medição em {data.split("-").reverse().join("/")}.</strong>{" "}
+                  Vale uma por dia: duas no mesmo dia deixam o ranking dependendo de qual delas o sistema pegar como
+                  início ou fim. Apague a anterior no histórico abaixo, ou escolha outra data.
+                </small></p>
+              )}
+
+              <div className="grade">
+                {campos.map((c) => (
+                  <div className="campo" key={c}>
+                    <label>{METRICAS[c].label} {METRICAS[c].un && `(${METRICAS[c].un})`}</label>
+                    <input inputMode="decimal" value={vals[c] ?? ""} onChange={(e) => setVals({ ...vals, [c]: e.target.value })} />
+                  </div>
+                ))}
+              </div>
+              <div className="linha" style={{ marginTop: 14 }}>
+                <button className="b" onClick={salvar} disabled={!!conflito}>Salvar medição</button>
+                <button className="b ghost" onClick={() => setVerExtras(!verExtras)}>
+                  {verExtras ? "Mostrar só os principais" : "Mostrar todos os indicadores"}
+                </button>
               </div>
             </div>
-
-            {conflito && (
-              <p style={{ margin: "0 0 12px" }}><small style={{ color: "var(--alerta)" }}>
-                <strong>{pessoa.nome} já tem uma medição em {data.split("-").reverse().join("/")}.</strong>{" "}
-                Vale uma por dia: duas no mesmo dia deixam o ranking dependendo de qual delas o sistema pegar como
-                início ou fim. Apague a anterior no histórico abaixo, ou escolha outra data.
-              </small></p>
-            )}
-
-            <div className="grade">
-              {campos.map((c) => (
-                <div className="campo" key={c}>
-                  <label>{METRICAS[c].label} {METRICAS[c].un && `(${METRICAS[c].un})`}</label>
-                  <input inputMode="decimal" value={vals[c] ?? ""} onChange={(e) => setVals({ ...vals, [c]: e.target.value })} />
-                </div>
-              ))}
-            </div>
-            <div className="linha" style={{ marginTop: 14 }}>
-              <button className="b" onClick={salvar} disabled={!!conflito}>Salvar medição</button>
-              <button className="b ghost" onClick={() => setVerExtras(!verExtras)}>
-                {verExtras ? "Mostrar só os principais" : "Mostrar todos os indicadores"}
-              </button>
-            </div>
-          </div>
-
-          <ImportarJSON db={db} up={up} />
+          )}
 
           <div className="cartao">
             <h2>Histórico de {pessoa.nome}</h2>
