@@ -85,6 +85,25 @@ $$;
 
 grant execute on function tem_acesso() to authenticated;
 
+-- O mesmo porteiro, consultado ANTES do login.
+--
+-- Sem ele, o app teria de manter duas listas: os convidados aqui e os
+-- usuários em Authentication → Users. Duas listas sempre divergem, e a
+-- divergência aparece como "não tem acesso" para quem você acabou de
+-- convidar. Com esta função, `permitidos` é a única lista que existe:
+-- quem está nela recebe o link e a conta nasce sozinha na primeira
+-- entrada; quem não está nem chega a receber e-mail.
+--
+-- Ela responde sim/não sobre UM e-mail informado, nunca devolve a lista.
+create or replace function email_permitido(alvo text) returns boolean
+  language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from permitidos where lower(email) = lower(trim(coalesce(alvo, '')))
+  );
+$$;
+
+grant execute on function email_permitido(text) to anon, authenticated;
+
 -- ============================================================
 --  Segurança em nível de linha.
 --

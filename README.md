@@ -59,15 +59,17 @@ volta apontando para `localhost`.
 
 O acesso tem **duas trancas**, e elas respondem a perguntas diferentes.
 
-**Tranca 1 — quem é você?** O login é por *link mágico*: a pessoa digita o
-e-mail, o Supabase manda um link, e clicar nele prova a posse daquela caixa de
-entrada. Não há senha para vazar nem para esquecer. O app pede o link com
-`shouldCreateUser: false`, então um e-mail desconhecido recebe uma recusa em vez
-de virar conta nova.
+**Tranca 1 — você foi convidado?** Antes de qualquer e-mail sair, o app pergunta
+ao banco se aquele endereço está na tabela `permitidos`. Quem não está recebe a
+recusa na hora e nem consome um envio. A conta em `Authentication → Users` nasce
+sozinha na primeira entrada de quem está — **`permitidos` é a única lista que
+você mantém**.
 
-**Tranca 2 — você foi convidado?** Provar que o e-mail é seu não faz dele um
-e-mail autorizado. Quem decide isso é a tabela `permitidos`, no banco. Para
-liberar alguém:
+**Tranca 2 — quem é você?** O login é por *link mágico*: o Supabase manda um
+link e clicar nele prova a posse daquela caixa de entrada. Não há senha para
+vazar nem para esquecer. Estar na lista não basta: é preciso abrir o e-mail.
+
+Para liberar alguém:
 
 ```sql
 insert into permitidos (email, nota) values ('fulano@email.com', 'treinador');
@@ -84,8 +86,16 @@ mesmo quem chame a API do Supabase por fora do app, com a chave pública na mão
 não lê nem grava uma linha se não estiver na lista. A tela apenas repete a
 pergunta antes, para poder dizer "sem acesso" em português.
 
-Reforço opcional, no painel: **Authentication → Sign In / Providers → Email**,
-desligue **Allow new users to sign up**. Aí nem conta chega a existir.
+> **Atenção ao painel:** em **Authentication → Sign In / Providers → Email**, a
+> opção **Allow new users to sign up** precisa ficar **ligada**. Ela não é a sua
+> tranca — quem barra é a `permitidos`, consultada antes. Desligá-la impediria a
+> conta de nascer na primeira entrada de quem você acabou de convidar.
+
+Uma troca consciente: a função que confere a lista é chamada antes do login, ou
+seja, sem estar logado. Ela responde apenas *sim/não* sobre um e-mail informado
+e nunca devolve a lista, mas quem tentar um endereço por vez descobre se ele
+está convidado. Para uma arena entre conhecidos, isso não vale o preço de manter
+duas listas desencontradas.
 
 ### Todos veem tudo
 

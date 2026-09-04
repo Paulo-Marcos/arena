@@ -62,14 +62,31 @@ function Portao() {
   const entrar = async (e) => {
     e.preventDefault();
     setAviso("Enviando…");
+
+    // Primeiro a lista de convidados, depois o e-mail. Nesta ordem a
+    // tabela `permitidos` é a única lista que existe: quem está nela
+    // entra (a conta nasce sozinha na primeira vez), quem não está nem
+    // consome um envio.
+    const { data: convidado, error: erroLista } = await sb.rpc("email_permitido", { alvo: email });
+    if (erroLista) {
+      setAviso("Não consegui conferir a lista de convidados. Rode o schema.sql no Supabase. (" + erroLista.message + ")");
+      return;
+    }
+    if (!convidado) {
+      setAviso("Este e-mail não está na lista de convidados. Peça a quem administra a arena para incluí-lo.");
+      return;
+    }
+
     const { error } = await sb.auth.signInWithOtp({
       email,
-      // shouldCreateUser: false faz o acesso ser só por convite. Quem não
-      // foi convidado recebe um erro em vez de virar usuário novo.
-      options: { emailRedirectTo: window.location.origin, shouldCreateUser: false },
+      options: { emailRedirectTo: window.location.origin, shouldCreateUser: true },
     });
+
+    // Chegando aqui, o e-mail É convidado. Qualquer erro agora é outra
+    // coisa — limite de envios, SMTP, configuração — e esconder isso
+    // atrás de "sem acesso" custa horas de procura no lugar errado.
     setAviso(error
-      ? "Este e-mail não tem acesso. Peça um convite a quem administra a arena."
+      ? "O e-mail está liberado, mas o envio falhou: " + error.message
       : "Link enviado. Abra sua caixa de entrada.");
   };
 
