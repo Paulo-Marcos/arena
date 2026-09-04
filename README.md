@@ -126,14 +126,50 @@ alterá-las, use **Deployments → ⋯ → Redeploy**.
 
 ---
 
+## No celular
+
+A interface se adapta a telas estreitas: as colunas viram pilhas, os campos crescem para
+o polegar, e as caixas de texto usam 16px porque abaixo disso o iOS dá zoom sozinho ao
+focar. A cerimônia também roda no celular — o palco rola quando o pódio não cabe, e a
+revelação tem botões grandes além do toque na tela e das setas do teclado.
+
+## Uma medição por atleta por dia
+
+Duas medições do mesmo atleta no mesmo dia não são mais informação: são ambiguidade. O
+ranking pega a primeira e a última medição de cada participante, e havendo duas no mesmo
+dia o resultado passa a depender de qual delas o banco devolveu primeiro.
+
+A trava está em dois lugares, de propósito. O formulário avisa e bloqueia antes de você
+digitar em vão; o índice único `exames_um_por_dia` garante de verdade, porque a tela é
+uma cópia entre várias — duas pessoas gravando ao mesmo tempo passariam por qualquer
+conferência feita só em memória.
+
+Para corrigir, apague a medição anterior no histórico do atleta.
+
+## Critérios de desempate
+
+Na configuração do evento você monta uma **fila ordenada** de indicadores. Empatou na
+categoria em disputa, consulta-se o primeiro da fila; empatou de novo, o segundo.
+
+Dois já é o ideal: um empate sobrevive ao primeiro desempate raramente e ao segundo
+quase nunca. O limite é cinco, mas do terceiro em diante você ganha regra para decorar
+sem ganhar decisão. Cada desempate é lido no modo recomendado do próprio indicador, e um
+desempate igual à categoria em disputa é ignorado — os valores que empataram são os
+mesmos, e consultá-los de novo daria o mesmo empate.
+
+Quem venceu no desempate aparece marcado na cerimônia e na prévia. Sem isso, dois números
+idênticos em ordens diferentes parecem erro do sistema — e a plateia cobra a explicação.
+
 ## Como as medições entram
 
 Três caminhos, do mais confiável ao mais automático:
 
 1. **Digitar** no formulário.
-2. **Importar JSON** — mande as fotos do relatório para o Claude com o texto que
-   o botão "Copiar texto para o Claude" gera, e cole a resposta. Aceita várias
-   medições de pessoas diferentes de uma vez, e cria quem ainda não existe.
+2. **Importar por chat de IA** — o botão "Copiar instruções para a IA" gera um texto
+   que ensina qualquer chat com visão (ChatGPT, Gemini, Claude, Copilot) a devolver o
+   formato certo. Cole esse texto junto com as fotos, traga a resposta de volta e
+   confira antes de importar. Aceita várias medições de pessoas diferentes de uma vez,
+   e cria quem ainda não existe.
 3. **Ler a imagem no navegador** (OCR) — preenche o formulário para conferência.
 
 O terceiro é o mais rápido e o menos exato: nos testes com relatórios da

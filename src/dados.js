@@ -80,6 +80,7 @@ export async function carregarTudo() {
       premiados: x.config?.premiados ?? 1,
       permitirRepetir: x.config?.permitirRepetir ?? false,
       normalizarTempo: x.config?.normalizarTempo ?? false,
+      desempate: x.config?.desempate ?? [],
       participantes: x.config?.participantes ?? [],
     })),
   };
@@ -104,6 +105,7 @@ const paraLinha = {
       premiados: ev.premiados,
       permitirRepetir: ev.permitirRepetir,
       normalizarTempo: ev.normalizarTempo,
+      desempate: ev.desempate,
       participantes: ev.participantes,
     },
   }),

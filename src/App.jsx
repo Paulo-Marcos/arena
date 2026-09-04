@@ -60,9 +60,35 @@ const dias = (a, b) => Math.max(1, Math.round((new Date(b) - new Date(a)) / 8640
 const fmt = (v, casas = 2) =>
   v === null || v === undefined || Number.isNaN(v) ? "—" : Number(v).toFixed(casas).replace(".", ",");
 
+/**
+ * Mérito de um participante num indicador. Devolve `null` quando falta
+ * o dado — quem não mediu não compete naquele indicador.
+ *
+ * O sinal já sai corrigido: `score` maior é sempre melhor, tanto para
+ * "perder gordura" quanto para "ganhar músculo". Quem chama não precisa
+ * lembrar de qual lado da régua o indicador está.
+ */
+function pontuar(campo, modo, ini, fim, evento) {
+  const vi = ini.d[campo], vf = fim.d[campo];
+  if (vi === undefined || vf === undefined || vi === null || vf === null) return null;
+
+  const abs = vf - vi;
+  const pct = vi === 0 ? 0 : (abs / Math.abs(vi)) * 100;
+  const d = dias(ini.data, fim.data);
+  let score = (modo === "pct" ? pct : abs) * (METRICAS[campo].melhor === "maior" ? 1 : -1);
+  if (evento.normalizarTempo) score = (score * 30) / d;
+
+  return { vi, vf, abs, pct, d, score };
+}
+
+// Dois números de ponto flutuante quase nunca são iguais por acidente,
+// mas -2.0 kg e -2.0 kg são o mesmo mérito e precisam empatar de fato.
+const IGUAIS = (a, b) => Math.abs(a - b) < 1e-9;
+
 function calcularRanking(evento, criterio, exames, pessoas) {
-  const meta = METRICAS[criterio.campo];
-  const dir = meta.melhor === "maior" ? 1 : -1;
+  // Desempate no mesmo indicador da disputa não desempata nada: os
+  // valores são os mesmos que acabaram de empatar. Some da fila.
+  const desempates = (evento.desempate ?? []).filter((c) => c !== criterio.campo && METRICAS[c]);
 
   const linhas = evento.participantes
     .map((p) => {
@@ -70,21 +96,44 @@ function calcularRanking(evento, criterio, exames, pessoas) {
       const fim = exames.find((e) => e.id === p.fimId);
       const nome = pessoas.find((x) => x.id === p.pessoaId)?.nome ?? "?";
       if (!ini || !fim) return null;
-      const vi = ini.d[criterio.campo];
-      const vf = fim.d[criterio.campo];
-      if (vi === undefined || vf === undefined || vi === null || vf === null) return null;
 
-      const abs = vf - vi;
-      const pct = vi === 0 ? 0 : (abs / Math.abs(vi)) * 100;
-      const d = dias(ini.data, fim.data);
-      let score = (criterio.modo === "pct" ? pct : abs) * dir;
-      if (evento.normalizarTempo) score = (score * 30) / d;
+      const principal = pontuar(criterio.campo, criterio.modo, ini, fim, evento);
+      if (!principal) return null;
 
-      return { pessoaId: p.pessoaId, nome, vi, vf, abs, pct, d, score };
+      return {
+        pessoaId: p.pessoaId,
+        nome,
+        ...principal,
+        // Cada desempate usa o modo recomendado do próprio indicador:
+        // o organizador escolheu a ordem da fila, não a régua de cada um.
+        extras: desempates.map((c) => pontuar(c, METRICAS[c].rec, ini, fim, evento)?.score ?? null),
+      };
     })
     .filter(Boolean);
 
-  return linhas.sort((a, b) => b.score - a.score);
+  linhas.sort((a, b) => {
+    if (!IGUAIS(a.score, b.score)) return b.score - a.score;
+    for (let i = 0; i < desempates.length; i += 1) {
+      const x = a.extras[i], y = b.extras[i];
+      if (x === null && y === null) continue;
+      if (x === null) return 1;   // quem não tem o dado desce
+      if (y === null) return -1;
+      if (!IGUAIS(x, y)) return y - x;
+    }
+    return 0;
+  });
+
+  // Marca quem venceu no desempate, para a cerimônia poder dizer por quê.
+  // Sem isso, dois números idênticos na tela em ordens diferentes parecem
+  // um erro do sistema — e a plateia é quem cobra a explicação.
+  linhas.forEach((l, i) => {
+    const ant = linhas[i - 1];
+    if (!ant || !IGUAIS(ant.score, l.score)) return;
+    const passo = l.extras.findIndex((v, k) => v !== null && ant.extras[k] !== null && !IGUAIS(v, ant.extras[k]));
+    if (passo >= 0) { l.desempatadoPor = desempates[passo]; ant.desempatadoPor = ant.desempatadoPor ?? desempates[passo]; }
+  });
+
+  return linhas;
 }
 
 /** Distribui os prêmios respeitando (ou não) a regra de campeão único. */
@@ -194,7 +243,55 @@ const CSS = `
             border-radius:50%;animation:gira .8s linear infinite;vertical-align:-2px}
 @keyframes gira{to{transform:rotate(360deg)}}
 .solta{border:1px dashed var(--linha);border-radius:3px;padding:18px;text-align:center;background:#F7FAF8}
-@media (max-width:640px){.wrap{padding:16px 12px 70px}.bc h1{font-size:27px}}
+
+/* ---- passo a passo numerado ---- */
+.passos{counter-reset:passo;list-style:none;padding:0;margin:0 0 14px}
+.passos li{counter-increment:passo;position:relative;padding:0 0 10px 34px;font-size:13.5px;line-height:1.5}
+.passos li::before{content:counter(passo);position:absolute;left:0;top:-1px;width:23px;height:23px;border-radius:50%;
+  background:var(--acao);color:#fff;font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;
+  display:flex;align-items:center;justify-content:center}
+
+/* ================= CELULAR =================
+   O palco da cerimônia precisa poder ROLAR: com oito atletas numa tela
+   de 667px de altura, "overflow:hidden" e centralização vertical
+   escondem o pódio e não há gesto que traga de volta. */
+@media (max-width:760px){
+  .wrap{padding:14px 12px 90px}
+  .bc h1{font-size:25px}
+  .bc h2{font-size:19px}
+  .topo{gap:8px;padding-bottom:10px}
+  .topo small{flex-basis:100%;order:3}
+  .abas{gap:4px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+  .aba{flex:1;min-width:max-content;padding:10px 14px}
+  .cartao{padding:13px}
+  /* Alvo de toque: 44px é o mínimo confortável para o polegar. */
+  .b{padding:11px 15px;min-height:44px}
+  .b.grande{font-size:18px;padding:14px 22px}
+  .palco .b.grande{width:min(100%,320px)}
+  .bc input,.bc select{padding:11px 10px;font-size:16px}  /* 16px evita o zoom automático do iOS */
+  .campo{min-width:0;flex-basis:100%}
+  .linha>.campo[style]{max-width:none!important}
+  .grade{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
+  /* Item e fileira empilham: o botão de excluir deixa de espremer o texto. */
+  /* O item empilha porque o botão de excluir espremeria o texto.
+     A fileira do atleta continua em linha: nome + selo cabem lado a lado,
+     e empilhá-la só esticaria o selo pela largura toda. */
+  .item{flex-direction:column;align-items:stretch;gap:8px}
+  .item>span:last-child{display:flex;gap:8px;flex-wrap:wrap}
+  .item>span:last-child>.b{flex:1}
+  .fileira{align-items:center}
+  .crit{flex-direction:column;align-items:stretch}
+  .modo{width:100%}
+  .modo button{flex:1;padding:10px 8px}
+  /* overflow-x fica explícito: com overflow-y:auto o eixo 'visible' vira 'auto' sozinho, e o confete criaria rolagem lateral. */
+  .palco{justify-content:flex-start;overflow-y:auto;overflow-x:hidden;padding:64px 14px 28px}
+  .palco h1{font-size:clamp(24px,8vw,38px)}
+  .pos{width:100%;gap:9px;padding:10px 11px}
+  .pos .lugar{font-size:20px;width:34px}
+  .pos .quem{font-size:15px}
+  .pos .val{font-size:19px}
+  .dica{text-align:center}
+}
 `;
 
 /* ------------------------------------------------------------------ *
@@ -205,6 +302,10 @@ export default function App() {
   const [carregou, setCarregou] = useState(false);
   const [aba, setAba] = useState("atletas");
   const [cerimonia, setCerimonia] = useState(null);
+  // Atleta escolhido na aba Atletas para receber uma medição. É o que
+  // permite "adicionar medição" começar de onde o clique aconteceu, em
+  // vez de jogar a pessoa num formulário em branco.
+  const [alvoMedicao, setAlvoMedicao] = useState(null);
   const [sincronia, setSincronia] = useState("ok"); // ok | salvando | erro
   const salvo = useRef(VAZIO);
 
@@ -257,8 +358,13 @@ export default function App() {
           ))}
         </div>
 
-        {aba === "atletas" && <Atletas db={db} up={up} />}
-        {aba === "medicoes" && <Medicoes db={db} up={up} />}
+        {aba === "atletas" && (
+          <Atletas db={db} up={up}
+            medir={(pessoaId) => { setAlvoMedicao(pessoaId); setAba("medicoes"); }} />
+        )}
+        {aba === "medicoes" && (
+          <Medicoes db={db} up={up} alvo={alvoMedicao} limparAlvo={() => setAlvoMedicao(null)} />
+        )}
         {aba === "eventos" && <Eventos db={db} up={up} abrir={setCerimonia} />}
       </div>
 
@@ -444,10 +550,11 @@ function Comparador({ db }) {
 }
 
 /* ---------------------------- ATLETAS ---------------------------- */
-function Atletas({ db, up }) {
+function Atletas({ db, up, medir }) {
   const [nome, setNome] = useState("");
   const [aberto, setAberto] = useState(null);
   const [metrica, setMetrica] = useState("peso");
+  const [comparando, setComparando] = useState(false);
 
   const add = () => {
     if (!nome.trim()) return;
@@ -468,6 +575,19 @@ function Atletas({ db, up }) {
   const alvo = disponiveis.includes(metrica) ? metrica : disponiveis[0];
   const pontos = meus.filter((e) => e.d[alvo] !== undefined).map((e) => ({ data: e.data, v: e.d[alvo] }));
   const pessoa = db.pessoas.find((p) => p.id === aberto);
+
+  // Comparar é outra tarefa, com outra pergunta na cabeça de quem usa.
+  // Dividindo a tela, cada página responde a uma coisa só.
+  if (comparando) {
+    return (
+      <>
+        <div className="linha" style={{ marginBottom: 14 }}>
+          <button className="b ghost" onClick={() => setComparando(false)}>← Voltar aos atletas</button>
+        </div>
+        <Comparador db={db} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -491,16 +611,27 @@ function Atletas({ db, up }) {
             </button>
           );
         })}
+
+        {db.pessoas.length >= 2 && (
+          <div style={{ marginTop: 16 }}>
+            <button className="b ghost" onClick={() => setComparando(true)}>Comparar atletas</button>
+            <p style={{ margin: "6px 0 0" }}><small>Trajetórias de até quatro pessoas no mesmo eixo, fora de qualquer evento.</small></p>
+          </div>
+        )}
       </div>
 
       {pessoa && (
         <div className="cartao">
           <div className="linha" style={{ justifyContent: "space-between", marginBottom: 10 }}>
             <h2 style={{ margin: 0 }}>{pessoa.nome}</h2>
-            <button className="b perigo" onClick={() => remover(pessoa.id)}>Excluir atleta e medições</button>
+            <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="b" style={{ background: "var(--acao)", borderColor: "var(--acao)" }}
+                onClick={() => medir(pessoa.id)}>+ Nova medição</button>
+              <button className="b perigo" onClick={() => remover(pessoa.id)}>Excluir atleta</button>
+            </span>
           </div>
 
-          {meus.length === 0 && <small>Sem medições ainda. Cadastre na aba Medições.</small>}
+          {meus.length === 0 && <small>Sem medições ainda. Use “+ Nova medição” para cadastrar a primeira.</small>}
 
           {meus.length > 0 && (
             <>
@@ -529,14 +660,13 @@ function Atletas({ db, up }) {
         </div>
       )}
 
-      {db.pessoas.length >= 2 && <Comparador db={db} />}
     </>
   );
 }
 
 /* ------------------ IMPORTAÇÃO E LEITURA DE RELATÓRIO -------------- */
 
-/** O texto que você cola no Claude junto com as fotos do relatório. */
+/** O texto que você cola no chat de IA junto com as fotos do relatório. */
 function montarPrompt() {
   const chaves = TODOS_CAMPOS
     .map((c) => `  "${c}"  — ${METRICAS[c].label}${METRICAS[c].un ? ` (${METRICAS[c].un})` : ""}`)
@@ -639,20 +769,32 @@ function ImportarJSON({ db, up }) {
 
   return (
     <div className="cartao">
-      <h2>Importar medições</h2>
+      <h2>Importar por chat de IA</h2>
       <p><small>
-        Mande as fotos do relatório para o Claude junto com o texto abaixo, e cole aqui o JSON que ele devolver.
-        Vale colar várias medições de uma vez, de pessoas diferentes. Quem ainda não estiver cadastrado é criado na hora.
+        O caminho mais preciso quando você tem a foto do relatório: quem lê a imagem é um chat de IA
+        (ChatGPT, Gemini, Claude, Copilot — qualquer um que aceite imagem), e o app só recebe o resultado já em texto.
+      </small></p>
+
+      <ol className="passos">
+        <li><strong>Copie as instruções</strong> no botão abaixo. É um texto que ensina a IA a devolver exatamente o formato que este app entende.</li>
+        <li><strong>Abra o chat de IA</strong> da sua preferência e <strong>cole o texto junto com as fotos</strong> do relatório de bioimpedância, na mesma mensagem.</li>
+        <li><strong>Copie a resposta</strong> — ela vem como um bloco de dados começando com <code>[</code> e terminando com <code>]</code>.</li>
+        <li><strong>Cole aqui embaixo</strong> e clique em <strong>Conferir</strong>. Nada é gravado antes de você ver a prévia.</li>
+      </ol>
+
+      <p><small>
+        Vale mandar várias medições de uma vez, inclusive de pessoas diferentes — quem ainda não estiver
+        cadastrado é criado na hora. Medições em uma data que o atleta já tem são marcadas e ficam de fora.
       </small></p>
 
       <div className="linha" style={{ marginBottom: 12 }}>
-        <button className="b ghost" onClick={() => {
+        <button className="b" style={{ background: "var(--acao)", borderColor: "var(--acao)" }} onClick={() => {
           navigator.clipboard?.writeText(montarPrompt())
-            .then(() => setMsg("Texto copiado. Cole no Claude junto com as fotos."))
-            .catch(() => setMsg("Não consegui copiar. O texto está no campo abaixo."));
+            .then(() => setMsg("Instruções copiadas. Cole no chat de IA junto com as fotos do relatório."))
+            .catch(() => setMsg("Não consegui copiar sozinho. O texto está no campo abaixo — selecione e copie."));
           setTexto(montarPrompt());
         }}>
-          Copiar texto para o Claude
+          1. Copiar instruções para a IA
         </button>
         <label className="b ghost" style={{ display: "inline-block" }}>
           Abrir arquivo .json
@@ -662,12 +804,12 @@ function ImportarJSON({ db, up }) {
       </div>
 
       <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={7}
-        placeholder='[{ "nome": "Paulo", "data": "2026-09-03", "valores": { "peso": 81.95 } }]'
+        placeholder='Cole aqui a resposta da IA — algo como [{ "nome": "Paulo", "data": "2026-09-03", "valores": { "peso": 81.95 } }]'
         style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5, padding: 10,
                  border: "1px solid var(--linha)", borderRadius: 2, resize: "vertical" }} />
 
       <div className="linha" style={{ marginTop: 10 }}>
-        <button className="b" disabled={!texto.trim()} onClick={() => analisar(texto)}>Conferir</button>
+        <button className="b" disabled={!texto.trim()} onClick={() => analisar(texto)}>4. Conferir</button>
         {previa && <button className="b" onClick={importar}
           disabled={!previa.entradas.some((e) => !e.repetida)}
           style={{ background: "var(--acao)", borderColor: "var(--acao)" }}>
@@ -740,11 +882,24 @@ function LeitorRelatorio({ aplicar }) {
 }
 
 /* --------------------------- MEDIÇÕES ---------------------------- */
-function Medicoes({ db, up }) {
-  const [pessoaId, setPessoaId] = useState(db.pessoas[0]?.id ?? "");
+function Medicoes({ db, up, alvo, limparAlvo }) {
+  const [pessoaId, setPessoaId] = useState(alvo ?? "");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [vals, setVals] = useState({});
   const [verExtras, setVerExtras] = useState(false);
+
+  // Quem chegou pelo botão "+ Nova medição" da ficha do atleta já vem
+  // com a pergunta respondida. O alvo é consumido uma vez e devolvido,
+  // senão ele prenderia a seleção nas visitas seguintes à aba.
+  useEffect(() => {
+    if (!alvo) return;
+    setPessoaId(alvo);
+    limparAlvo();
+  }, [alvo]);
+
+  const pessoa = db.pessoas.find((p) => p.id === pessoaId);
+  const meus = db.exames.filter((e) => e.pessoaId === pessoaId).sort((a, b) => (a.data < b.data ? 1 : -1));
+  const conflito = meus.find((e) => e.data === data);
 
   const aplicarLeitura = ({ data: dt, nome, valores }) => {
     if (dt && /^\d{4}-\d{2}-\d{2}$/.test(dt)) setData(dt);
@@ -755,7 +910,7 @@ function Medicoes({ db, up }) {
   };
 
   const salvar = () => {
-    if (!pessoaId || !data) return;
+    if (!pessoaId || !data || conflito) return;
     const d = {};
     Object.entries(vals).forEach(([k, v]) => { if (v !== "" && v !== undefined) d[k] = Number(String(v).replace(",", ".")); });
     if (Object.keys(d).length === 0) return;
@@ -764,64 +919,87 @@ function Medicoes({ db, up }) {
   };
 
   const campos = verExtras ? TODOS_CAMPOS : CAMPOS_PRINCIPAIS;
-  const lista = [...db.exames].sort((a, b) => (a.data < b.data ? 1 : -1));
 
   return (
     <>
-      <ImportarJSON db={db} up={up} />
-
+      {/* Primeira pergunta, sempre: de quem é esta medição? Tudo abaixo
+          depende da resposta, então ela não pode ficar no meio da tela. */}
       <div className="cartao">
-        <h2>Nova medição</h2>
-        <p><small>Envie a imagem do relatório ou digite os valores. Deixe em branco o que não for usar — só entra no ranking o critério que os dois exames tiverem.</small></p>
-        <LeitorRelatorio aplicar={aplicarLeitura} />
-        <div className="linha" style={{ marginBottom: 12 }}>
-          <div className="campo" style={{ maxWidth: 240 }}>
-            <label>Atleta</label>
-            <select value={pessoaId} onChange={(e) => setPessoaId(e.target.value)}>
-              <option value="">Selecione</option>
-              {db.pessoas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
-            </select>
-          </div>
-          <div className="campo" style={{ maxWidth: 180 }}>
-            <label>Data da medição</label>
-            <input type="date" value={data} onChange={(e) => setData(e.target.value)} />
-          </div>
+        <h2>De quem é a medição?</h2>
+        <div className="campo" style={{ maxWidth: 340 }}>
+          <label>Atleta</label>
+          <select value={pessoaId} onChange={(e) => setPessoaId(e.target.value)}>
+            <option value="">Selecione um atleta</option>
+            {db.pessoas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+          </select>
         </div>
-        <div className="grade">
-          {campos.map((c) => (
-            <div className="campo" key={c}>
-              <label>{METRICAS[c].label} {METRICAS[c].un && `(${METRICAS[c].un})`}</label>
-              <input inputMode="decimal" value={vals[c] ?? ""} onChange={(e) => setVals({ ...vals, [c]: e.target.value })} />
+        {db.pessoas.length === 0 && (
+          <p style={{ marginTop: 10 }}><small>Nenhum atleta cadastrado ainda. Comece pela aba <strong>Atletas</strong>.</small></p>
+        )}
+      </div>
+
+      {!pessoa ? (
+        <div className="cartao"><small>Escolha um atleta acima para cadastrar e ver as medições dele.</small></div>
+      ) : (
+        <>
+          <div className="cartao">
+            <h2>Nova medição de {pessoa.nome}</h2>
+            <p><small>Envie a imagem do relatório ou digite os valores. Deixe em branco o que não for usar — só entra no ranking o indicador que as duas medições tiverem.</small></p>
+            <LeitorRelatorio aplicar={aplicarLeitura} />
+
+            <div className="linha" style={{ marginBottom: 12 }}>
+              <div className="campo" style={{ maxWidth: 200 }}>
+                <label>Data da medição</label>
+                <input type="date" value={data} onChange={(e) => setData(e.target.value)} />
+              </div>
             </div>
-          ))}
-        </div>
-        <div className="linha" style={{ marginTop: 14 }}>
-          <button className="b" onClick={salvar}>Salvar medição</button>
-          <button className="b ghost" onClick={() => setVerExtras(!verExtras)}>
-            {verExtras ? "Mostrar só os principais" : "Mostrar todos os indicadores"}
-          </button>
-        </div>
-      </div>
 
-      <div className="cartao">
-        <h2>Histórico</h2>
-        {lista.length === 0 && <small>Sem medições registradas.</small>}
-        {lista.map((e) => (
-          <div className="item" key={e.id}>
-            <span>
-              <strong>{db.pessoas.find((p) => p.id === e.pessoaId)?.nome ?? "?"}</strong>
-              <small style={{ marginLeft: 10 }}>{e.data.split("-").reverse().join("/")}</small>
-              <br />
-              <small>
-                {CAMPOS_PRINCIPAIS.filter((c) => e.d[c] !== undefined)
-                  .map((c) => `${METRICAS[c].label}: ${fmt(e.d[c], 1)}${METRICAS[c].un}`)
-                  .join("   ·   ")}
-              </small>
-            </span>
-            <button className="b perigo" onClick={() => up({ exames: db.exames.filter((x) => x.id !== e.id) })}>Excluir</button>
+            {conflito && (
+              <p style={{ margin: "0 0 12px" }}><small style={{ color: "var(--alerta)" }}>
+                <strong>{pessoa.nome} já tem uma medição em {data.split("-").reverse().join("/")}.</strong>{" "}
+                Vale uma por dia: duas no mesmo dia deixam o ranking dependendo de qual delas o sistema pegar como
+                início ou fim. Apague a anterior no histórico abaixo, ou escolha outra data.
+              </small></p>
+            )}
+
+            <div className="grade">
+              {campos.map((c) => (
+                <div className="campo" key={c}>
+                  <label>{METRICAS[c].label} {METRICAS[c].un && `(${METRICAS[c].un})`}</label>
+                  <input inputMode="decimal" value={vals[c] ?? ""} onChange={(e) => setVals({ ...vals, [c]: e.target.value })} />
+                </div>
+              ))}
+            </div>
+            <div className="linha" style={{ marginTop: 14 }}>
+              <button className="b" onClick={salvar} disabled={!!conflito}>Salvar medição</button>
+              <button className="b ghost" onClick={() => setVerExtras(!verExtras)}>
+                {verExtras ? "Mostrar só os principais" : "Mostrar todos os indicadores"}
+              </button>
+            </div>
           </div>
-        ))}
-      </div>
+
+          <ImportarJSON db={db} up={up} />
+
+          <div className="cartao">
+            <h2>Histórico de {pessoa.nome}</h2>
+            {meus.length === 0 && <small>Nenhuma medição registrada para {pessoa.nome}.</small>}
+            {meus.map((e) => (
+              <div className="item" key={e.id}>
+                <span>
+                  <strong>{e.data.split("-").reverse().join("/")}</strong>
+                  <br />
+                  <small>
+                    {CAMPOS_PRINCIPAIS.filter((c) => e.d[c] !== undefined)
+                      .map((c) => `${METRICAS[c].label}: ${fmt(e.d[c], 1)}${METRICAS[c].un}`)
+                      .join("   ·   ")}
+                  </small>
+                </span>
+                <button className="b perigo" onClick={() => up({ exames: db.exames.filter((x) => x.id !== e.id) })}>Excluir</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </>
   );
 }
@@ -832,7 +1010,8 @@ function Eventos({ db, up, abrir }) {
   const ev = db.eventos.find((e) => e.id === editando);
 
   const criar = () => {
-    const novo = { id: nid(), nome: "Novo evento", criterios: [], premiados: 1, permitirRepetir: false, normalizarTempo: false, participantes: [] };
+    const novo = { id: nid(), nome: `Evento de ${new Date().toLocaleDateString("pt-BR", { month: "long" })}`,
+      criterios: [], premiados: 1, permitirRepetir: false, normalizarTempo: false, desempate: [], participantes: [] };
     up({ eventos: [...db.eventos, novo] });
     setEditando(novo.id);
   };
@@ -842,20 +1021,32 @@ function Eventos({ db, up, abrir }) {
     return (
       <div className="cartao">
         <h2>Eventos</h2>
-        <p><small>Um evento é uma disputa: critérios escolhidos, participantes com exame inicial e final, e uma cerimônia de premiação.</small></p>
-        {db.eventos.map((e) => (
-          <div className="item" key={e.id}>
-            <span>
-              <strong>{e.nome}</strong><br />
-              <small>{e.participantes.length} participantes · {e.criterios.length} categorias · {e.premiados} premiado(s) por categoria</small>
-            </span>
-            <span style={{ display: "flex", gap: 8 }}>
-              <button className="b ghost" onClick={() => setEditando(e.id)}>Configurar</button>
-              <button className="b" disabled={!e.criterios.length || e.participantes.length < 2} onClick={() => abrir(e.id)}>Iniciar cerimônia</button>
-            </span>
-          </div>
-        ))}
-        <div style={{ marginTop: 14 }}><button className="b" onClick={criar}>Criar evento</button></div>
+        <p><small>
+          Um evento é uma disputa: categorias escolhidas, participantes com medição inicial e final, e regras de premiação.
+          Ele fica guardado do jeito que você deixar — a cerimônia é um momento à parte, para o dia da premiação.
+        </small></p>
+
+        {db.eventos.length === 0 && <small>Nenhum evento ainda. Crie um, configure com calma, e volte aqui quando for premiar.</small>}
+
+        {db.eventos.map((e) => {
+          const pronto = e.criterios.length > 0 && e.participantes.length >= 2;
+          return (
+            <div className="item" key={e.id}>
+              <span>
+                <strong>{e.nome}</strong><br />
+                <small>
+                  {e.participantes.length} participantes · {e.criterios.length} categorias · {e.premiados} premiado(s) por categoria
+                  {!pronto && <> · <span style={{ color: "var(--alerta)" }}>configuração incompleta</span></>}
+                </small>
+              </span>
+              <span style={{ display: "flex", gap: 8 }}>
+                <button className="b" onClick={() => setEditando(e.id)}>Abrir e configurar</button>
+                <button className="b ghost" disabled={!pronto} onClick={() => abrir(e.id)}>Iniciar cerimônia</button>
+              </span>
+            </div>
+          );
+        })}
+        <div style={{ marginTop: 16 }}><button className="b" onClick={criar}>Criar evento</button></div>
       </div>
     );
   }
@@ -953,6 +1144,8 @@ function EditorEvento({ ev, db, up, salvarEv, voltar, abrir }) {
         </label>
       </div>
 
+      <Desempate ev={ev} salvarEv={salvarEv} />
+
       <div className="cartao">
         <h2>Participantes</h2>
         {ev.participantes.length === 0 && <small>Nenhum participante inscrito.</small>}
@@ -999,11 +1192,99 @@ function EditorEvento({ ev, db, up, salvarEv, voltar, abrir }) {
 
       <Previa ev={ev} db={db} />
 
-      <div style={{ textAlign: "center", margin: "22px 0" }}>
-        <button className="b grande" disabled={!pronto} onClick={() => abrir(ev.id)}>Iniciar cerimônia</button>
-        {!pronto && <p><small>Faltam critérios, participantes ou medições válidas (inicial diferente da final).</small></p>}
+      <div className="cartao" style={{ textAlign: "center" }}>
+        <p><small>
+          Tudo aqui é gravado enquanto você digita — não existe botão de salvar, e sair não perde nada.
+          A cerimônia é opcional e pode esperar o dia da premiação.
+        </small></p>
+        <div className="linha" style={{ justifyContent: "center", marginTop: 6 }}>
+          <button className="b" onClick={voltar}>Concluir e voltar aos eventos</button>
+          <button className="b ghost" disabled={!pronto} onClick={() => abrir(ev.id)}
+            style={pronto ? { color: "var(--ouro)", borderColor: "var(--ouro)" } : undefined}>
+            Iniciar cerimônia agora
+          </button>
+        </div>
+        {!pronto && <p style={{ marginTop: 10 }}><small>
+          Para a cerimônia ainda faltam: {[
+            ev.criterios.length ? null : "escolher ao menos uma categoria",
+            ev.participantes.length >= 2 ? null : "inscrever ao menos dois participantes",
+            ev.participantes.every((p) => p.iniId && p.fimId && p.iniId !== p.fimId) ? null : "definir medição inicial e final diferentes para cada um",
+          ].filter(Boolean).join(" · ")}.
+        </small></p>}
       </div>
     </>
+  );
+}
+
+/* ------------------------- DESEMPATE ------------------------------ *
+ *  Uma fila de indicadores, na ordem. Empatou na categoria em disputa,
+ *  desce um degrau; empatou de novo, desce mais um.
+ * ------------------------------------------------------------------ */
+const MAX_DESEMPATE = 5;
+
+function Desempate({ ev, salvarEv }) {
+  const fila = ev.desempate ?? [];
+  const setFila = (nova) => salvarEv({ desempate: nova });
+  const fora = TODOS_CAMPOS.filter((c) => !fila.includes(c));
+
+  const mover = (i, passo) => {
+    const j = i + passo;
+    if (j < 0 || j >= fila.length) return;
+    const nova = [...fila];
+    [nova[i], nova[j]] = [nova[j], nova[i]];
+    setFila(nova);
+  };
+
+  return (
+    <div className="cartao">
+      <h2>Critérios de desempate</h2>
+      <p><small>
+        Quando duas pessoas terminam a categoria com exatamente o mesmo mérito, a ordem abaixo decide quem fica na
+        frente: consulta-se o primeiro indicador da fila; persistindo o empate, o segundo; e assim por diante.
+        Cada um é lido no seu modo recomendado.
+      </small></p>
+      <p><small>
+        <strong>Dois já é o ideal.</strong> Um empate sobrevive ao primeiro desempate raramente, e ao segundo quase
+        nunca; do terceiro em diante você ganha regra para decorar sem ganhar decisão. O limite é {MAX_DESEMPATE}.
+      </small></p>
+
+      {fila.length === 0 && <small>Nenhum critério de desempate. Havendo empate, a ordem entre os empatados fica indefinida.</small>}
+
+      {fila.map((campo, i) => (
+        <div className="item" key={campo}>
+          <span>
+            <span className="num">{i + 1}º</span> &nbsp;<strong>{METRICAS[campo].label}</strong>{" "}
+            <span className="tag">{METRICAS[campo].melhor === "maior" ? "maior, melhor" : "menor, melhor"}</span>
+            <span className="tag" style={{ marginLeft: 6 }}>{METRICAS[campo].rec === "pct" ? "percentual" : "absoluto"}</span>
+          </span>
+          <span style={{ display: "flex", gap: 6 }}>
+            <button className="b ghost" disabled={i === 0} onClick={() => mover(i, -1)} aria-label="Subir">↑</button>
+            <button className="b ghost" disabled={i === fila.length - 1} onClick={() => mover(i, 1)} aria-label="Descer">↓</button>
+            <button className="b perigo" onClick={() => setFila(fila.filter((c) => c !== campo))}>Tirar</button>
+          </span>
+        </div>
+      ))}
+
+      {fila.length < MAX_DESEMPATE && fora.length > 0 && (
+        <div className="linha" style={{ marginTop: 14 }}>
+          <div className="campo" style={{ maxWidth: 300 }}>
+            <label>Acrescentar ao fim da fila</label>
+            <select value="" onChange={(e) => e.target.value && setFila([...fila, e.target.value])}>
+              <option value="">Selecione um indicador</option>
+              {fora.map((c) => <option key={c} value={c}>{METRICAS[c].label}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+      {fila.length >= MAX_DESEMPATE && <small>Limite de {MAX_DESEMPATE} atingido. Tire um para acrescentar outro.</small>}
+
+      {fila.length > 0 && (
+        <p style={{ marginTop: 12, marginBottom: 0 }}><small>
+          Um desempate igual à categoria em disputa é ignorado automaticamente: os valores que empataram
+          são os mesmos, e consultá-los de novo daria o mesmo empate.
+        </small></p>
+      )}
+    </div>
   );
 }
 
@@ -1021,7 +1302,10 @@ function Previa({ ev, db }) {
             <h3>{METRICAS[c.campo].label} <span className="tag">{c.modo === "pct" ? "percentual" : "absoluto"}</span></h3>
             {r.map((l, i) => (
               <div className="item" key={l.pessoaId}>
-                <span><span className="num">{i + 1}º</span> &nbsp;{l.nome}</span>
+                <span>
+                  <span className="num">{i + 1}º</span> &nbsp;{l.nome}
+                  {l.desempatadoPor && <span className="tag" style={{ marginLeft: 8 }}>desempate: {METRICAS[l.desempatadoPor].label}</span>}
+                </span>
                 <small>
                   {fmt(l.vi, 1)} → {fmt(l.vf, 1)} {METRICAS[c.campo].un} &nbsp;·&nbsp;
                   <span className={l.score >= 0 ? "mais" : "menos"}>
@@ -1147,6 +1431,9 @@ function Cerimonia({ evento, db, fechar }) {
                   {l.nome}
                   {l.premio === 1 && <span className="tag" style={{ marginLeft: 8, color: "var(--ouro)", borderColor: "var(--ouro)" }}>campeão</span>}
                   {l.bloqueado && <span className="tag" style={{ marginLeft: 8, color: "#7E979F", borderColor: "#33474F" }}>já premiado</span>}
+                  {l.desempatadoPor && <span className="tag" style={{ marginLeft: 8, color: "#9DB2B8", borderColor: "#33474F" }}>
+                    desempate: {METRICAS[l.desempatadoPor].label}
+                  </span>}
                   <br /><small style={{ color: "#7E979F" }}>{fmt(l.vi, 1)} → {fmt(l.vf, 1)} {METRICAS[criterio.campo].un} · {l.d} dias</small>
                 </span>
                 <span className="val">
@@ -1156,13 +1443,22 @@ function Cerimonia({ evento, db, fechar }) {
             );
           })}
           {fase === "revelando" && (
-            <p className="dica">
-              {visiveis === 0
-                ? <>Clique ou pressione <kbd>→</kbd> para revelar o último colocado</>
-                : visiveis < rankingAtual.length
-                  ? <>Clique ou <kbd>→</kbd> para o {rankingAtual.length - visiveis}º lugar &nbsp;·&nbsp; <kbd>←</kbd> volta</>
-                  : <>Clique ou <kbd>→</kbd> para coroar o campeão</>}
-            </p>
+            <>
+              {/* No celular não há seta nem "clique na tela" evidente.
+                  Um botão de verdade resolve, e no computador ele não atrapalha. */}
+              <div className="linha" style={{ justifyContent: "center", marginTop: 18, width: "100%" }}>
+                <button className="b ghost" disabled={visiveis === 0}
+                  style={{ color: "#F2F6F4", borderColor: "#33474F" }}
+                  onClick={(e) => { e.stopPropagation(); setVisiveis((v) => Math.max(0, v - 1)); }}>Voltar</button>
+                <button className="b grande" style={{ background: "var(--ouro)", borderColor: "var(--ouro)", color: "#0C1D26", flex: 1, maxWidth: 320 }}
+                  onClick={(e) => { e.stopPropagation(); avancar(); }}>
+                  {visiveis === 0 ? "Revelar o último colocado"
+                    : visiveis < rankingAtual.length ? `Revelar o ${rankingAtual.length - visiveis}º lugar`
+                    : "Coroar o campeão"}
+                </button>
+              </div>
+              <p className="dica">Toque na tela, no botão, ou use <kbd>→</kbd> e <kbd>←</kbd></p>
+            </>
           )}
           {fase === "resultado" && (
             <>
