@@ -148,14 +148,16 @@ Para corrigir, apague a medição anterior no histórico do atleta.
 
 ## Critérios de desempate
 
-Na configuração do evento você monta uma **fila ordenada** de indicadores. Empatou na
-categoria em disputa, consulta-se o primeiro da fila; empatou de novo, o segundo.
+Na configuração do evento, **cada categoria tem a sua própria fila ordenada** de
+indicadores. Empatou na categoria em disputa, consulta-se o primeiro da fila; empatou de
+novo, o segundo. O que desempata massa gorda não precisa ser o que desempata pontuação —
+e faz sentido que não seja, já que os indicadores se relacionam de formas diferentes.
 
 Dois já é o ideal: um empate sobrevive ao primeiro desempate raramente e ao segundo
 quase nunca. O limite é cinco, mas do terceiro em diante você ganha regra para decorar
-sem ganhar decisão. Cada desempate é lido no modo recomendado do próprio indicador, e um
-desempate igual à categoria em disputa é ignorado — os valores que empataram são os
-mesmos, e consultá-los de novo daria o mesmo empate.
+sem ganhar decisão. Cada desempate é lido no modo recomendado do próprio indicador, e a categoria em disputa
+nem aparece na lista da própria fila — os valores que empataram são os mesmos, e
+consultá-los de novo daria o mesmo empate.
 
 Quem venceu no desempate aparece marcado na cerimônia e na prévia. Sem isso, dois números
 idênticos em ordens diferentes parecem erro do sistema — e a plateia cobra a explicação.

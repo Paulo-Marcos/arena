@@ -73,16 +73,22 @@ export async function carregarTudo() {
   return {
     pessoas: (p.data ?? []).map((x) => ({ id: x.id, nome: x.nome })),
     exames: (e.data ?? []).map((x) => ({ id: x.id, pessoaId: x.pessoa_id, data: x.data, d: x.d ?? {} })),
-    eventos: (ev.data ?? []).map((x) => ({
-      id: x.id,
-      nome: x.nome,
-      criterios: x.config?.criterios ?? [],
-      premiados: x.config?.premiados ?? 1,
-      permitirRepetir: x.config?.permitirRepetir ?? false,
-      normalizarTempo: x.config?.normalizarTempo ?? false,
-      desempate: x.config?.desempate ?? [],
-      participantes: x.config?.participantes ?? [],
-    })),
+    eventos: (ev.data ?? []).map((x) => {
+      const c = x.config ?? {};
+      // O desempate já foi um só para o evento inteiro. Agora cada
+      // categoria tem a sua fila; a lista antiga desce para todas aqui,
+      // na leitura, para eventos gravados antes da mudança.
+      const antigo = c.desempate ?? [];
+      return {
+        id: x.id,
+        nome: x.nome,
+        criterios: (c.criterios ?? []).map((k) => ({ ...k, desempate: k.desempate ?? antigo })),
+        premiados: c.premiados ?? 1,
+        permitirRepetir: c.permitirRepetir ?? false,
+        normalizarTempo: c.normalizarTempo ?? false,
+        participantes: c.participantes ?? [],
+      };
+    }),
   };
 }
 
@@ -105,7 +111,6 @@ const paraLinha = {
       premiados: ev.premiados,
       permitirRepetir: ev.permitirRepetir,
       normalizarTempo: ev.normalizarTempo,
-      desempate: ev.desempate,
       participantes: ev.participantes,
     },
   }),

@@ -86,9 +86,12 @@ function pontuar(campo, modo, ini, fim, evento) {
 const IGUAIS = (a, b) => Math.abs(a - b) < 1e-9;
 
 function calcularRanking(evento, criterio, exames, pessoas) {
+  // Cada categoria tem a sua fila. `evento.desempate` é a forma antiga,
+  // de quando havia uma fila só para o evento inteiro.
   // Desempate no mesmo indicador da disputa não desempata nada: os
   // valores são os mesmos que acabaram de empatar. Some da fila.
-  const desempates = (evento.desempate ?? []).filter((c) => c !== criterio.campo && METRICAS[c]);
+  const desempates = (criterio.desempate ?? evento.desempate ?? [])
+    .filter((c) => c !== criterio.campo && METRICAS[c]);
 
   const linhas = evento.participantes
     .map((p) => {
@@ -1011,7 +1014,7 @@ function Eventos({ db, up, abrir }) {
 
   const criar = () => {
     const novo = { id: nid(), nome: `Evento de ${new Date().toLocaleDateString("pt-BR", { month: "long" })}`,
-      criterios: [], premiados: 1, permitirRepetir: false, normalizarTempo: false, desempate: [], participantes: [] };
+      criterios: [], premiados: 1, permitirRepetir: false, normalizarTempo: false, participantes: [] };
     up({ eventos: [...db.eventos, novo] });
     setEditando(novo.id);
   };
@@ -1060,7 +1063,7 @@ function EditorEvento({ ev, db, up, salvarEv, voltar, abrir }) {
     salvarEv({
       criterios: marcado(campo)
         ? ev.criterios.filter((c) => c.campo !== campo)
-        : [...ev.criterios, { campo, modo: METRICAS[campo].rec }],
+        : [...ev.criterios, { campo, modo: METRICAS[campo].rec, desempate: [] }],
     });
   const setModo = (campo, modo) => salvarEv({ criterios: ev.criterios.map((c) => (c.campo === campo ? { ...c, modo } : c)) });
 
@@ -1223,9 +1226,38 @@ function EditorEvento({ ev, db, up, salvarEv, voltar, abrir }) {
 const MAX_DESEMPATE = 5;
 
 function Desempate({ ev, salvarEv }) {
-  const fila = ev.desempate ?? [];
-  const setFila = (nova) => salvarEv({ desempate: nova });
-  const fora = TODOS_CAMPOS.filter((c) => !fila.includes(c));
+  const setFila = (campo, fila) =>
+    salvarEv({ criterios: ev.criterios.map((c) => (c.campo === campo ? { ...c, desempate: fila } : c)) });
+
+  return (
+    <div className="cartao">
+      <h2>Critérios de desempate</h2>
+      <p><small>
+        Quando duas pessoas terminam uma categoria com exatamente o mesmo mérito, uma fila de indicadores decide quem
+        fica na frente: consulta-se o primeiro; persistindo o empate, o segundo; e assim por diante.
+        <strong> Cada categoria tem a sua fila</strong> — o que desempata massa gorda não precisa ser o que desempata
+        pontuação.
+      </small></p>
+      <p><small>
+        <strong>Dois já é o ideal.</strong> Um empate sobrevive ao primeiro desempate raramente, e ao segundo quase
+        nunca; do terceiro em diante você ganha regra para decorar sem ganhar decisão. O limite é {MAX_DESEMPATE}.
+      </small></p>
+
+      {ev.criterios.length === 0 && <small>Escolha as categorias em disputa acima para configurar o desempate de cada uma.</small>}
+
+      {ev.criterios.map((c) => (
+        <FilaDesempate key={c.campo} criterio={c} setFila={(f) => setFila(c.campo, f)} />
+      ))}
+    </div>
+  );
+}
+
+/* A fila de uma única categoria. */
+function FilaDesempate({ criterio, setFila }) {
+  const fila = criterio.desempate ?? [];
+  // O próprio indicador em disputa fica fora: os valores que empataram
+  // são os mesmos, e consultá-los de novo daria o mesmo empate.
+  const fora = TODOS_CAMPOS.filter((x) => x !== criterio.campo && !fila.includes(x));
 
   const mover = (i, passo) => {
     const j = i + passo;
@@ -1236,19 +1268,17 @@ function Desempate({ ev, salvarEv }) {
   };
 
   return (
-    <div className="cartao">
-      <h2>Critérios de desempate</h2>
-      <p><small>
-        Quando duas pessoas terminam a categoria com exatamente o mesmo mérito, a ordem abaixo decide quem fica na
-        frente: consulta-se o primeiro indicador da fila; persistindo o empate, o segundo; e assim por diante.
-        Cada um é lido no seu modo recomendado.
-      </small></p>
-      <p><small>
-        <strong>Dois já é o ideal.</strong> Um empate sobrevive ao primeiro desempate raramente, e ao segundo quase
-        nunca; do terceiro em diante você ganha regra para decorar sem ganhar decisão. O limite é {MAX_DESEMPATE}.
-      </small></p>
+    <div style={{ border: "1px solid var(--linha)", borderLeft: "4px solid var(--acao)", borderRadius: 2, padding: 12, marginBottom: 10 }}>
+      <h3 style={{ margin: "0 0 8px" }}>
+        {METRICAS[criterio.campo].label}{" "}
+        <span className="tag">{criterio.modo === "pct" ? "percentual" : "absoluto"}</span>
+      </h3>
 
-      {fila.length === 0 && <small>Nenhum critério de desempate. Havendo empate, a ordem entre os empatados fica indefinida.</small>}
+      {fila.length === 0 && (
+        <p style={{ margin: "0 0 8px" }}><small>
+          Sem desempate. Havendo empate nesta categoria, a ordem entre os empatados fica indefinida.
+        </small></p>
+      )}
 
       {fila.map((campo, i) => (
         <div className="item" key={campo}>
@@ -1260,29 +1290,23 @@ function Desempate({ ev, salvarEv }) {
           <span style={{ display: "flex", gap: 6 }}>
             <button className="b ghost" disabled={i === 0} onClick={() => mover(i, -1)} aria-label="Subir">↑</button>
             <button className="b ghost" disabled={i === fila.length - 1} onClick={() => mover(i, 1)} aria-label="Descer">↓</button>
-            <button className="b perigo" onClick={() => setFila(fila.filter((c) => c !== campo))}>Tirar</button>
+            <button className="b perigo" onClick={() => setFila(fila.filter((x) => x !== campo))}>Tirar</button>
           </span>
         </div>
       ))}
 
-      {fila.length < MAX_DESEMPATE && fora.length > 0 && (
-        <div className="linha" style={{ marginTop: 14 }}>
+      {fila.length < MAX_DESEMPATE ? (
+        <div className="linha" style={{ marginTop: 10 }}>
           <div className="campo" style={{ maxWidth: 300 }}>
             <label>Acrescentar ao fim da fila</label>
             <select value="" onChange={(e) => e.target.value && setFila([...fila, e.target.value])}>
               <option value="">Selecione um indicador</option>
-              {fora.map((c) => <option key={c} value={c}>{METRICAS[c].label}</option>)}
+              {fora.map((x) => <option key={x} value={x}>{METRICAS[x].label}</option>)}
             </select>
           </div>
         </div>
-      )}
-      {fila.length >= MAX_DESEMPATE && <small>Limite de {MAX_DESEMPATE} atingido. Tire um para acrescentar outro.</small>}
-
-      {fila.length > 0 && (
-        <p style={{ marginTop: 12, marginBottom: 0 }}><small>
-          Um desempate igual à categoria em disputa é ignorado automaticamente: os valores que empataram
-          são os mesmos, e consultá-los de novo daria o mesmo empate.
-        </small></p>
+      ) : (
+        <small>Limite de {MAX_DESEMPATE} atingido nesta categoria. Tire um para acrescentar outro.</small>
       )}
     </div>
   );
