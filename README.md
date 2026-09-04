@@ -25,13 +25,8 @@ cp .env.example .env      # preencha com a URL e a chave anon
 npm run dev
 ```
 
-A leitura de imagem não funciona em `npm run dev` puro, porque a pasta `api/`
-só existe no ambiente da Vercel. Para testá-la localmente:
-
-```bash
-npm i -g vercel
-vercel dev
-```
+Tudo funciona localmente, inclusive a leitura de imagem: o reconhecimento roda
+no navegador, sem servidor e sem chave de API.
 
 ---
 
@@ -45,21 +40,72 @@ git init && git add . && git commit -m "primeira versão"
 Na Vercel: **Add New → Project**, importe o repositório, framework **Vite**.
 Em **Settings → Environment Variables**, cadastre as três:
 
-| Nome | Valor | Onde é lido |
-|---|---|---|
-| `VITE_SUPABASE_URL` | URL do projeto | navegador |
-| `VITE_SUPABASE_ANON_KEY` | chave anon | navegador |
-| `ANTHROPIC_API_KEY` | chave da Anthropic | **só no servidor** |
+| Nome | Valor |
+|---|---|
+| `VITE_SUPABASE_URL` | URL do projeto |
+| `VITE_SUPABASE_ANON_KEY` | chave anon |
 
-O prefixo `VITE_` é o que decide se a variável entra no pacote enviado ao
-navegador. A chave da Anthropic **nunca** pode ter esse prefixo — ela é lida
-apenas dentro de `api/extrair.js`, que roda no servidor.
+Não há nenhuma chave de API paga no projeto. As duas variáveis acima são
+públicas por natureza; quem protege os dados é o RLS.
 
 Por último, no Supabase em **Authentication → URL Configuration**, coloque o
 endereço publicado em **Site URL**, senão o link de acesso enviado por e-mail
 volta apontando para `localhost`.
 
 ---
+
+## 4. Quem pode entrar
+
+O app é **só por convite**. O login pede um link mágico com
+`shouldCreateUser: false`, ou seja, um e-mail desconhecido recebe uma recusa em
+vez de virar conta nova.
+
+Para fechar a porta de vez, no Supabase:
+
+1. **Authentication → Sign In / Providers → Email**: desligue **Allow new users
+   to sign up**.
+2. **Authentication → Users → Invite user**: convide, um a um, os e-mails que
+   podem entrar.
+
+Quem não estiver na lista não consegue entrar nem criar conta. Para tirar
+alguém, basta apagar o usuário na mesma tela.
+
+Lembre que cada conta enxerga apenas os próprios dados. Se a ideia é que várias
+pessoas vejam a mesma arena, o caminho é uma conta compartilhada por enquanto —
+compartilhar entre contas exige uma coluna de "arena" nas tabelas e um ajuste
+nas políticas de RLS.
+
+---
+
+## 5. Atualizações
+
+Depois do primeiro deploy, publicar é só isto:
+
+```bash
+git add . && git commit -m "o que mudou" && git push
+```
+
+A Vercel observa o repositório, roda o build e publica sozinha. Um push em
+outro branch gera uma URL de prévia, sem tocar na versão que está no ar.
+
+Uma exceção: mudar variáveis de ambiente **não** dispara publicação. Depois de
+alterá-las, use **Deployments → ⋯ → Redeploy**.
+
+---
+
+## Como as medições entram
+
+Três caminhos, do mais confiável ao mais automático:
+
+1. **Digitar** no formulário.
+2. **Importar JSON** — mande as fotos do relatório para o Claude com o texto que
+   o botão "Copiar texto para o Claude" gera, e cole a resposta. Aceita várias
+   medições de pessoas diferentes de uma vez, e cria quem ainda não existe.
+3. **Ler a imagem no navegador** (OCR) — preenche o formulário para conferência.
+
+O terceiro é o mais rápido e o menos exato: nos testes com relatórios da
+Relaxmedic ele acertou 16 dos 17 indicadores, errando a pontuação corporal, que
+é impressa numa fonte grande e clara que o OCR não enxerga.
 
 ## Como os dados são guardados
 

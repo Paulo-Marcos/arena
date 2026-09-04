@@ -534,68 +534,206 @@ function Atletas({ db, up }) {
   );
 }
 
-/* ------------------ LEITURA AUTOMÁTICA DO RELATÓRIO ---------------- */
-const paraBase64 = (file) =>
-  new Promise((ok, erro) => {
-    const r = new FileReader();
-    r.onload = () => ok(r.result.split(",")[1]);
-    r.onerror = () => erro(new Error("Não foi possível ler o arquivo."));
-    r.readAsDataURL(file);
+/* ------------------ IMPORTAÇÃO E LEITURA DE RELATÓRIO -------------- */
+
+/** O texto que você cola no Claude junto com as fotos do relatório. */
+function montarPrompt() {
+  const chaves = TODOS_CAMPOS
+    .map((c) => `  "${c}"  — ${METRICAS[c].label}${METRICAS[c].un ? ` (${METRICAS[c].un})` : ""}`)
+    .join("\n");
+  return `Leia as imagens de relatório de bioimpedância em anexo e devolva APENAS um JSON, sem texto antes ou depois e sem cercas de código.
+
+Formato — uma entrada por medição (páginas diferentes do mesmo exame são uma entrada só):
+
+[
+  { "nome": "Fulano", "data": "AAAA-MM-DD", "valores": { "peso": 81.95, "gorduraKg": 22.0 } }
+]
+
+"nome" vem do ID do relatório e "data" do horário da medição.
+Use apenas as chaves abaixo, e inclua só as que aparecerem de fato na imagem.
+Números com ponto decimal, sem unidade e sem aspas.
+
+${chaves}`;
+}
+
+/** Aceita um objeto, uma lista, ou uma lista embrulhada em { medicoes: [...] }. */
+function lerJSON(texto) {
+  const bruto = JSON.parse(texto);
+  const lista = Array.isArray(bruto) ? bruto : bruto.medicoes ?? bruto.entradas ?? [bruto];
+  const entradas = [];
+  const avisos = [];
+
+  lista.forEach((item, i) => {
+    const rot = `entrada ${i + 1}`;
+    const nome = String(item?.nome ?? "").trim();
+    const data = String(item?.data ?? "").trim();
+    if (!nome) return avisos.push(`${rot}: sem nome.`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return avisos.push(`${rot} (${nome}): data fora do formato AAAA-MM-DD.`);
+
+    const valores = {};
+    const ignoradas = [];
+    Object.entries(item?.valores ?? {}).forEach(([k, v]) => {
+      const n = Number(String(v).replace(",", "."));
+      if (!METRICAS[k]) ignoradas.push(k);
+      else if (!Number.isNaN(n)) valores[k] = n;
+    });
+    if (ignoradas.length) avisos.push(`${rot} (${nome}): chaves desconhecidas ignoradas — ${ignoradas.join(", ")}.`);
+    if (!Object.keys(valores).length) return avisos.push(`${rot} (${nome}): nenhum indicador reconhecido.`);
+
+    entradas.push({ nome, data, valores });
   });
 
+  return { entradas, avisos };
+}
+
+function ImportarJSON({ db, up }) {
+  const [texto, setTexto] = useState("");
+  const [previa, setPrevia] = useState(null);
+  const [msg, setMsg] = useState("");
+
+  const analisar = (conteudo) => {
+    setMsg("");
+    try {
+      const { entradas, avisos } = lerJSON(conteudo);
+      if (!entradas.length) {
+        setPrevia(null);
+        setMsg(avisos.join(" ") || "Nenhuma medição válida encontrada.");
+        return;
+      }
+      const marcadas = entradas.map((e) => {
+        const pessoa = db.pessoas.find((p) => p.nome.trim().toLowerCase() === e.nome.toLowerCase());
+        const repetida = pessoa && db.exames.some((x) => x.pessoaId === pessoa.id && x.data === e.data);
+        return { ...e, novaPessoa: !pessoa, repetida };
+      });
+      setPrevia({ entradas: marcadas, avisos });
+    } catch (err) {
+      setPrevia(null);
+      setMsg("O conteúdo não é um JSON válido. Verifique se copiou o bloco inteiro, das chaves de abertura às de fechamento.");
+    }
+  };
+
+  const importar = () => {
+    const pessoas = [...db.pessoas];
+    const exames = [...db.exames];
+    let novos = 0;
+
+    previa.entradas.filter((e) => !e.repetida).forEach((e) => {
+      let pessoa = pessoas.find((p) => p.nome.trim().toLowerCase() === e.nome.toLowerCase());
+      if (!pessoa) { pessoa = { id: nid(), nome: e.nome }; pessoas.push(pessoa); }
+      exames.push({ id: nid(), pessoaId: pessoa.id, data: e.data, d: e.valores });
+      novos += 1;
+    });
+
+    up({ pessoas, exames });
+    setPrevia(null);
+    setTexto("");
+    setMsg(`${novos} ${novos === 1 ? "medição importada" : "medições importadas"}.`);
+  };
+
+  const arquivo = (f) => {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { setTexto(String(r.result)); analisar(String(r.result)); };
+    r.readAsText(f);
+  };
+
+  return (
+    <div className="cartao">
+      <h2>Importar medições</h2>
+      <p><small>
+        Mande as fotos do relatório para o Claude junto com o texto abaixo, e cole aqui o JSON que ele devolver.
+        Vale colar várias medições de uma vez, de pessoas diferentes. Quem ainda não estiver cadastrado é criado na hora.
+      </small></p>
+
+      <div className="linha" style={{ marginBottom: 12 }}>
+        <button className="b ghost" onClick={() => {
+          navigator.clipboard?.writeText(montarPrompt())
+            .then(() => setMsg("Texto copiado. Cole no Claude junto com as fotos."))
+            .catch(() => setMsg("Não consegui copiar. O texto está no campo abaixo."));
+          setTexto(montarPrompt());
+        }}>
+          Copiar texto para o Claude
+        </button>
+        <label className="b ghost" style={{ display: "inline-block" }}>
+          Abrir arquivo .json
+          <input type="file" accept=".json,application/json" style={{ display: "none" }}
+            onChange={(e) => { arquivo(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+      </div>
+
+      <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={7}
+        placeholder='[{ "nome": "Paulo", "data": "2026-09-03", "valores": { "peso": 81.95 } }]'
+        style={{ width: "100%", fontFamily: "ui-monospace, monospace", fontSize: 12.5, padding: 10,
+                 border: "1px solid var(--linha)", borderRadius: 2, resize: "vertical" }} />
+
+      <div className="linha" style={{ marginTop: 10 }}>
+        <button className="b" disabled={!texto.trim()} onClick={() => analisar(texto)}>Conferir</button>
+        {previa && <button className="b" onClick={importar}
+          disabled={!previa.entradas.some((e) => !e.repetida)}
+          style={{ background: "var(--acao)", borderColor: "var(--acao)" }}>
+          Importar {previa.entradas.filter((e) => !e.repetida).length}
+        </button>}
+      </div>
+
+      {msg && <p style={{ marginTop: 10 }}><small>{msg}</small></p>}
+
+      {previa && (
+        <div style={{ marginTop: 14 }}>
+          <h3>Confira antes de importar</h3>
+          {previa.entradas.map((e, i) => (
+            <div className="item" key={i}>
+              <span>
+                <strong>{e.nome}</strong>
+                {e.novaPessoa && <span className="tag" style={{ marginLeft: 8 }}>atleta novo</span>}
+                {e.repetida && <span className="tag" style={{ marginLeft: 8, color: "var(--alerta)", borderColor: "var(--alerta)" }}>já existe nesta data</span>}
+                <br />
+                <small>{e.data.split("-").reverse().join("/")} · {Object.keys(e.valores).length} indicadores · {
+                  CAMPOS_PRINCIPAIS.filter((c) => e.valores[c] !== undefined)
+                    .map((c) => `${METRICAS[c].label}: ${fmt(e.valores[c], 1)}${METRICAS[c].un}`).join("   ·   ")
+                }</small>
+              </span>
+            </div>
+          ))}
+          {previa.avisos.map((a, i) => (
+            <p key={i} style={{ margin: "6px 0 0" }}><small style={{ color: "var(--alerta)" }}>{a}</small></p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Leitura por OCR, dentro do próprio navegador. Sem chave, sem servidor. */
 function LeitorRelatorio({ aplicar }) {
-  const [estado, setEstado] = useState("parado"); // parado | lendo | erro
+  const [estado, setEstado] = useState("parado");
+  const [pct, setPct] = useState(0);
   const [msg, setMsg] = useState("");
 
   const processar = async (files) => {
     if (!files?.length) return;
-    setEstado("lendo"); setMsg("");
+    setEstado("lendo"); setMsg(""); setPct(0);
     try {
-      const imagens = await Promise.all(
-        Array.from(files).slice(0, 4).map(async (f) => ({
-          type: "image",
-          source: { type: "base64", media_type: f.type || "image/jpeg", data: await paraBase64(f) },
-        }))
-      );
-      const chaves = TODOS_CAMPOS.map((c) => `"${c}" (${METRICAS[c].label}${METRICAS[c].un ? ` em ${METRICAS[c].un}` : ""})`).join(", ");
-      const instrucao =
-        `Estas imagens são páginas de um relatório de bioimpedância. Extraia os valores medidos.\n` +
-        `Responda APENAS com um objeto JSON, sem texto antes ou depois e sem cercas de código, no formato:\n` +
-        `{"nome": string|null, "data": "AAAA-MM-DD"|null, "valores": { ... }}\n` +
-        `O campo "data" vem do horário da medição. O campo "nome" vem do ID do relatório.\n` +
-        `As chaves de "valores" devem ser exatamente estas, e só inclua as que você encontrar de fato: ${chaves}.\n` +
-        `Use ponto como separador decimal e apenas números. Se um valor não aparecer, omita a chave.`;
-
-      const r = await fetch("/api/extrair", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imagens, instrucao }),
-      });
-      const data = await r.json();
-      const texto = (data.content || []).map((i) => (i.type === "text" ? i.text : "")).join("\n");
-      const limpo = texto.replace(/```json|```/g, "").trim();
-      const lido = JSON.parse(limpo.slice(limpo.indexOf("{"), limpo.lastIndexOf("}") + 1));
-      const valores = {};
-      Object.entries(lido.valores || {}).forEach(([k, v]) => {
-        if (METRICAS[k] && v !== null && v !== "" && !Number.isNaN(Number(v))) valores[k] = Number(v);
-      });
-      if (!Object.keys(valores).length) throw new Error("Nenhum valor reconhecido na imagem.");
-      aplicar({ data: lido.data, nome: lido.nome, valores });
+      const { lerTexto, interpretar } = await import("./ocr");
+      const texto = await lerTexto(Array.from(files).slice(0, 4), (p) => setPct(Math.round(p * 100)));
+      const { nome, data, valores } = interpretar(texto);
+      const n = Object.keys(valores).length;
+      if (!n) throw new Error("nada reconhecido");
+      aplicar({ data, nome, valores });
       setEstado("parado");
-      setMsg(`${Object.keys(valores).length} indicadores preenchidos. Confira antes de salvar.`);
+      setMsg(`${n} indicadores preenchidos. Confira cada um antes de salvar.`);
     } catch (e) {
       setEstado("erro");
-      setMsg("A leitura falhou. Tente uma foto mais nítida e enquadrada, ou digite os valores manualmente.");
+      setMsg("A leitura não deu certo. Prefira o print do relatório à foto da tela, ou use a importação por JSON acima.");
     }
   };
 
   return (
     <div className="solta" style={{ marginBottom: 16 }}>
-      <p style={{ margin: "0 0 10px" }}><strong style={{ fontSize: 14 }}>Ler do relatório</strong></p>
-      <p><small>Envie a foto ou o print do relatório da balança. Pode mandar as duas páginas de uma vez — os valores e a data são preenchidos no formulário abaixo.</small></p>
+      <p style={{ margin: "0 0 10px" }}><strong style={{ fontSize: 14 }}>Ou tente ler a imagem aqui mesmo</strong></p>
+      <p><small>O reconhecimento roda no seu navegador. Funciona bem com prints nítidos e erra mais com fotos de tela.</small></p>
       <input type="file" accept="image/*" multiple style={{ maxWidth: 320, margin: "0 auto" }}
         disabled={estado === "lendo"} onChange={(e) => { processar(e.target.files); e.target.value = ""; }} />
-      {estado === "lendo" && <p style={{ marginTop: 10 }}><span className="carregando" /> <small>Lendo os números da imagem…</small></p>}
+      {estado === "lendo" && <p style={{ marginTop: 10 }}><span className="carregando" /> <small> Reconhecendo… {pct}%</small></p>}
       {msg && <p style={{ marginTop: 10 }}><small style={{ color: estado === "erro" ? "var(--alerta)" : "var(--acao)" }}>{msg}</small></p>}
     </div>
   );
@@ -630,6 +768,8 @@ function Medicoes({ db, up }) {
 
   return (
     <>
+      <ImportarJSON db={db} up={up} />
+
       <div className="cartao">
         <h2>Nova medição</h2>
         <p><small>Envie a imagem do relatório ou digite os valores. Deixe em branco o que não for usar — só entra no ranking o critério que os dois exames tiverem.</small></p>

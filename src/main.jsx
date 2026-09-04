@@ -29,9 +29,13 @@ function Portao() {
     setAviso("Enviando…");
     const { error } = await sb.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: window.location.origin },
+      // shouldCreateUser: false faz o acesso ser só por convite. Quem não
+      // foi convidado recebe um erro em vez de virar usuário novo.
+      options: { emailRedirectTo: window.location.origin, shouldCreateUser: false },
     });
-    setAviso(error ? "Não foi possível enviar o link. Confira o e-mail." : "Link enviado. Abra sua caixa de entrada.");
+    setAviso(error
+      ? "Este e-mail não tem acesso. Peça um convite a quem administra a arena."
+      : "Link enviado. Abra sua caixa de entrada.");
   };
 
   return (
